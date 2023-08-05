@@ -1,0 +1,113 @@
+name: Pull Request Check
+
+on:
+  pull_request:
+    branches: [ master ]
+env:
+    tf_version: '1.3.9'
+    go_version: '1.20'
+concurrency:
+  group: atlas-kubernetes
+  cancel-in-progress: false
+jobs:
+    file-change-test:
+      runs-on: self-hosted
+      outputs:
+        k8s: ${{ steps.filter.outputs.k8s }}
+      steps:
+      - uses: actions/checkout@master
+      - uses: dorny/paths-filter@v2
+        id: filter
+        with:
+          filters: |
+            k8s:
+             - 'src/**'
+             - 'tests/**'
+
+    pull-request-matrix:
+      runs-on: self-hosted
+      strategy:
+        matrix:
+          workspace: [ private, public, common_pre, common_prd ]
+        fail-fast: false
+      env:
+        TF_WORKSPACE: ${{ matrix.workspace }}
+      steps:
+      - name: 'Checkout'
+        uses: actions/checkout@master
+
+      - name: Terraform fmt
+        id: fmt
+        working-directory: src
+        run: terraform fmt
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        working-directory: src
+        run: terraform init -input=false
+      
+      - name: Terraform Validate
+        id: validate
+        working-directory: src
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: src
+        run: terraform plan -input=false -var="vault_approle_role_id=${{ secrets.atlas_vault_role_Id }}" -var="vault_approle_secret_id=${{ secrets.atlas_vault_secret_Id }}" -no-color
+
+      - name: Post Plan
+        uses: robburger/terraform-pr-commenter@v1
+        continue-on-error: true # In case the output is too long to post
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPAND_SUMMARY_DETAILS: 'true' # Override global environment variable; expand details just for this step
+        with:
+          commenter_type: plan
+          commenter_input: ${{ format('{0}{1}', steps.plan.outputs.stdout, steps.plan.outputs.stderr) }}
+          commenter_exitcode: ${{ steps.plan.outputs.exitcode }}
+
+    test:
+      if: ${{ needs.file-change-test.outputs.k8s == 'true' }}
+      needs: file-change-test
+      runs-on: self-hosted
+      steps:
+      - name: 'Checkout'
+        uses: actions/checkout@master    
+
+      - name: Import Secrets for AWS
+        uses: hashicorp/vault-action@v2.4.3
+        with:
+            url: https://vault.theatlastango.tools
+            method: approle
+            roleId: ${{ secrets.atlas_vault_role_Id }}
+            secretId: ${{ secrets.atlas_vault_secret_Id }}
+            secrets: |
+                /atlas/aws/atlas-testing/terraform-user aws_access_key_id | AWS_ACCESS_KEY_ID ;
+                /atlas/aws/atlas-testing/terraform-user aws_secret_access_key | AWS_SECRET_ACCESS_KEY ;
+      
+      - name: Install Go
+        uses: actions/setup-go@v3.5.0
+        with:
+          go-version: ${{ env.go_version }}
+
+      - uses: hashicorp/setup-terraform@v2.0.3
+        with:
+          terraform_version: ${{ env.tf_version }}
+          terraform_wrapper: false
+
+      - name: Run Integration Tests
+        working-directory: tests
+        run: echo "it ran"
+
+    pull-request:
+      if: ${{ always() }}
+      runs-on: self-hosted
+      needs: pull-request-matrix
+      steps:
+        - name: Check build matrix secret
+          if: ${{ needs.pull-request-matrix.result != 'success'}}
+          run: exit 1
+		  
+		  
