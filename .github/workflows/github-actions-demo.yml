@@ -16,9 +16,9 @@ jobs:
         run: |
           ls ${{ github.workspace }}
       - run: echo "🍏 This job's status is ${{ job.status }}."
-    comment-with-action:
-    runs-on: ubuntu-latest
-    steps:
+  comment-with-action:
+     runs-on: ubuntu-latest
+     steps:
       - name: "dump github context"
         run: echo '${{ toJSON(github.event) }}' | jq
         shell: bash
