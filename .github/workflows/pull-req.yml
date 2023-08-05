@@ -1,6 +1,5 @@
 name: Pull Request Check
-
- on: [push]
+on: [push]
 env:
     tf_version: '1.3.9'
     go_version: '1.20'
